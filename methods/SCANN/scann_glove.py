@@ -1,27 +1,26 @@
-"""
-OPQ + PQ MIPS for GloVe (Mac-compatible FAISS)
-Uses OPQMatrix instead of IndexOPQ.
-"""
-
 import numpy as np
-import h5py, requests, tempfile
-import faiss
-import time, psutil, os
+import h5py
+import requests
+import tempfile
+import time
+import scann
+import psutil
+import os
 
 # -----------------------------
-# Utils
+# Helpers
 # -----------------------------
-def mem_mb():
-    return psutil.Process(os.getpid()).memory_info().rss / (1024**2)
+def get_mem_mb():
+    return psutil.Process(os.getpid()).memory_info().rss / (1024 ** 2)
 
-def recall_at_k(I, gt, k):
+def recall_at_k(neighbors, gt, k):
     return np.mean([
-        np.intersect1d(I[i], gt[i]).size / k
+        np.intersect1d(neighbors[i], gt[i]).size / k
         for i in range(len(gt))
     ])
 
 # -----------------------------
-# Load ANN-Benchmarks GloVe-100-angular
+# Download ANN-Benchmarks GloVe-100
 # -----------------------------
 with tempfile.TemporaryDirectory() as tmp:
     url = "http://ann-benchmarks.com/glove-100-angular.hdf5"
@@ -32,59 +31,68 @@ with tempfile.TemporaryDirectory() as tmp:
     f = h5py.File(path, "r")
     xb = f["train"][:]          # (1,183,514, 100)
     xq = f["test"][:]           # (10,000, 100)
-    gt = f["neighbors"][:, :10] # GT@10
+    gt = f["neighbors"][:, :10] # ground truth @10
 
 print("Base:", xb.shape, "Query:", xq.shape)
 
 # -----------------------------
-# Normalize (CRITICAL)
+# Normalize (IMPORTANT)
 # -----------------------------
 xb /= np.linalg.norm(xb, axis=1, keepdims=True)
 xq /= np.linalg.norm(xq, axis=1, keepdims=True)
 
 # -----------------------------
-# OPQ + PQ parameters
+# ScaNN parameters
 # -----------------------------
-d = xb.shape[1]   # 100
 k = 10
-M = 10            # number of PQ blocks (bytes per vector)
-nbits = 8         # bits per sub-quantizer (256 centroids)
+num_leaves = 2000
+num_leaves_to_search = 100
+dimensions_per_block = 2
+reorder_k = 100
 
 # -----------------------------
-# Build OPQ + PQ index
+# Build index
 # -----------------------------
-print("\nBuilding OPQ + PQ index...")
-mem_before = mem_mb()
+print("\nBuilding ScaNN index...")
+mem_before = get_mem_mb()
 t0 = time.time()
 
-opq = faiss.OPQMatrix(d, M)
-pq  = faiss.IndexPQ(d, M, nbits, faiss.METRIC_INNER_PRODUCT)
-index = faiss.IndexPreTransform(opq, pq)
-
-index.train(xb)   # trains OPQ + PQ
-index.add(xb)
+searcher = scann.scann_ops_pybind.builder(
+    xb, k, "dot_product"
+).tree(
+    num_leaves=num_leaves,
+    num_leaves_to_search=num_leaves_to_search,
+    training_sample_size=250_000
+).score_ah(
+    dimensions_per_block=dimensions_per_block,
+    anisotropic_quantization_threshold=0.2
+).reorder(
+    reorder_k
+).build()
 
 t1 = time.time()
-mem_after = mem_mb()
+mem_after = get_mem_mb()
 
 # -----------------------------
-# Search
+# Search (10k queries)
 # -----------------------------
 print("Searching...")
 t2 = time.time()
-D, I = index.search(xq, k)
+neighbors, distances = searcher.search_batched(
+    xq, final_num_neighbors=k
+)
 t3 = time.time()
 
 # -----------------------------
 # Recall
 # -----------------------------
-recall = recall_at_k(I, gt, k)
+recall = recall_at_k(neighbors, gt, k)
 
 # -----------------------------
 # Report
 # -----------------------------
 print("\n============================")
-print("OPQ + PQ Results (GloVe-100-angular)")
+print("ScaNN Results (GloVe-100-angular)")
 print("============================")
 print(f"Recall@10        : {recall:.4f}")
 print(f"Build time (s)   : {t1 - t0:.2f}")

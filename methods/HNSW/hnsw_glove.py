@@ -1,148 +1,97 @@
-"""
-HNSW Evaluation on GloVe Embeddings
------------------------------------
-
-We evaluate HNSW for Maximum Inner Product Search (Cosine similarity)
-on a sampled subset of GloVe vectors.
-
-Ground-truth is computed via exact cosine similarity.
-"""
-
 import numpy as np
+import h5py
+import requests
+import tempfile
+import time
 import hnswlib
-import psutil, os, time
+import psutil
+import os
 
+# -----------------------------
+# Utils
+# -----------------------------
+def mem_mb():
+    return psutil.Process(os.getpid()).memory_info().rss / (1024**2)
 
-# ----------------------------------------
-# Memory utility
-# ----------------------------------------
-def memory_mb():
-    return psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+def recall_at_k(neighbors, gt, k):
+    return np.mean([
+        np.intersect1d(neighbors[i], gt[i]).size / k
+        for i in range(len(gt))
+    ])
 
+# -----------------------------
+# Load ANN-Benchmarks GloVe-100-angular
+# -----------------------------
+with tempfile.TemporaryDirectory() as tmp:
+    url = "http://ann-benchmarks.com/glove-100-angular.hdf5"
+    path = os.path.join(tmp, "glove100.hdf5")
+    with open(path, "wb") as f:
+        f.write(requests.get(url).content)
 
-# ----------------------------------------
-# Load GloVe text file (50d)
-# ----------------------------------------
-def load_glove(filepath, max_words=50000):
-    words = []
-    vecs = []
+    f = h5py.File(path, "r")
+    xb = f["train"][:]          # (1,183,514, 100)
+    xq = f["test"][:]           # (10,000, 100)
+    gt = f["neighbors"][:, :10] # GT@10
 
-    with open(filepath, "r", encoding="utf8") as f:
-        for i, line in enumerate(f):
-            if i >= max_words:
-                break
-            
-            parts = line.strip().split()
-            word = parts[0]
-            vec = np.array([float(x) for x in parts[1:]], dtype=np.float32)
+print("Base:", xb.shape, "Query:", xq.shape)
 
-            words.append(word)
-            vecs.append(vec)
-
-    vecs = np.vstack(vecs)
-    return words, vecs
-
-
-# ----------------------------------------
-# Build MIPS ground truth (cosine)
-# ----------------------------------------
-def compute_gt(xb, xq, k=10):
-    sims = xq @ xb.T                     # cosine sim because already normalized
-    idx = np.argpartition(-sims, k, axis=1)[:, :k]
-
-    # sort each row
-    sorted_idx = np.argsort(-sims[np.arange(len(xq))[:, None], idx], axis=1)
-    return idx[np.arange(len(xq))[:, None], sorted_idx]
-
-
-# ----------------------------------------
-# Load dataset
-# ----------------------------------------
-FILE = "../datasets/glove.6B/glove.6B.50d.txt"
-
-print("Loading GloVe embeddings...")
-words, xb = load_glove(FILE, max_words=20000)   # sample first 20k
-dim = xb.shape[1]
-
-# L2-normalize for cosine/MIPS
+# -----------------------------
+# Normalize (CRITICAL)
+# Angular ⇔ dot product on unit vectors
+# -----------------------------
 xb /= np.linalg.norm(xb, axis=1, keepdims=True)
+xq /= np.linalg.norm(xq, axis=1, keepdims=True)
 
-# Create query set by randomly sampling
-np.random.seed(0)
-q_idx = np.random.choice(len(xb), size=500, replace=False)
-
-xq = xb[q_idx]
-base = xb
-
-print("Base vectors:", base.shape)
-print("Query vectors:", xq.shape)
-
-
-# ----------------------------------------
-# Compute ground-truth (exact MIPS)
-# ----------------------------------------
-print("Computing ground-truth MIPS...")
-gt = compute_gt(base, xq, k=10)
-print("GT shape:", gt.shape)
-
-
-# ----------------------------------------
-# Build HNSW index
-# ----------------------------------------
-M = 16
+# -----------------------------
+# HNSW parameters
+# -----------------------------
+dim = xb.shape[1]
+k = 10
+M = 32
 ef_construction = 200
 ef_search = 100
 
-mem_before = memory_mb()
+# -----------------------------
+# Build HNSW index
+# -----------------------------
+print("\nBuilding HNSW index...")
+mem_before = mem_mb()
+t0 = time.time()
 
 index = hnswlib.Index(space="ip", dim=dim)
-index.init_index(max_elements=len(base), ef_construction=ef_construction, M=M)
+index.init_index(
+    max_elements=xb.shape[0],
+    ef_construction=ef_construction,
+    M=M
+)
+index.add_items(xb)
 
-print("\nAdding items to HNSW...")
-t0 = time.time()
-index.add_items(base)
 t1 = time.time()
+mem_after = mem_mb()
 
-mem_after = memory_mb()
-index_mem = mem_after - mem_before
-
-
-print(f"Index built in {t1 - t0:.4f} sec")
-print(f"Index memory: {index_mem:.2f} MB")
-
-
-# ----------------------------------------
+# -----------------------------
 # Search
-# ----------------------------------------
+# -----------------------------
 index.set_ef(ef_search)
 
 print("Searching...")
 t2 = time.time()
-labels, dist = index.knn_query(xq, k=10)
+neighbors, distances = index.knn_query(xq, k=k)
 t3 = time.time()
 
-search_time = t3 - t2
-latency = (search_time / len(xq)) * 1000
+# -----------------------------
+# Recall
+# -----------------------------
+recall = recall_at_k(neighbors, gt, k)
 
-
-# ----------------------------------------
-# Compute Recall & Precision
-# ----------------------------------------
-correct = (labels == gt)
-recall = correct.sum() / (len(xq) * 10)
-precision = recall   # same for fixed-k
-
-
-# ----------------------------------------
-# Print results
-# ----------------------------------------
+# -----------------------------
+# Report
+# -----------------------------
 print("\n============================")
-print("       HNSW (GloVe) METRICS")
+print("HNSW Results (GloVe-100-angular)")
 print("============================")
-print(f"Recall@10     = {recall:.4f}")
-print(f"Precision@10  = {precision:.4f}")
-print(f"Build Time    = {t1 - t0:.4f} sec")
-print(f"Search Time   = {search_time:.4f} sec for {len(xq)} queries")
-print(f"Latency/query = {latency:.4f} ms")
-print(f"Index Memory  = {index_mem:.2f} MB")
-print("============================")
+print(f"Recall@10        : {recall:.4f}")
+print(f"Build time (s)   : {t1 - t0:.2f}")
+print(f"Search time (s)  : {t3 - t2:.2f}")
+print(f"Avg latency (ms) : {1000 * (t3 - t2) / len(xq):.3f}")
+print(f"Index memory (MB): {mem_after - mem_before:.2f}")
