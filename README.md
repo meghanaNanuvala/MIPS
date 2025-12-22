@@ -1,55 +1,76 @@
 # ANN Methods for Maximum Inner Product Search (MIPS)
 
-This directory contains reference implementations of representative **Approximate Nearest Neighbor (ANN)** methods used in our experimental study on **Maximum Inner Product Search (MIPS)** and **Euclidean (L2) similarity search**.  
+This directory contains reference implementations of representative **Approximate Nearest Neighbor (ANN)** methods used in our experimental study on **Maximum Inner Product Search (MIPS)**.  
 The code is organized by ANN family and supports experiments on both **GloVe-100-angular** and **SIFT1M** benchmarks.
 
 The implementations are designed to reproduce the results reported in our paper and facilitate systematic comparison across accuracy, latency, build time, and memory usage.
 
----
+## 🔹 Method Descriptions
 
-## Directory Structure
+### 1. Annoy (Sign Random Projections)
+**Folder:** `Annoy/`  
+Implements Annoy with Sign Random Projection (SRP) hashing for approximate similarity search.
+
+- `annoy_srp.py`: Generic SRP-based Annoy implementation  
+- `annoy_srp_glove.py`: Annoy SRP configured for GloVe-100-angular (MIPS)
+
+This method emphasizes fast indexing and simplicity but typically trades off recall.
 
 
-Each subdirectory corresponds to a distinct ANN family, with dataset-specific scripts.
+### 2. FAISS (OPQ + PQ)
+**Folder:** `FAISS/`  
+Implements FAISS using Optimized Product Quantization (OPQ) followed by Product Quantization (PQ).
 
----
+- `faiss_pq_glove.py`: FAISS OPQ+PQ for GloVe-100-angular  
+- `faiss_pq_sift.py`: FAISS OPQ+PQ for SIFT1M (L2)
 
-## Implemented Methods
+These scripts focus on **memory-efficient indexing**, reflecting classic accuracy–compression trade-offs.
 
-### Annoy (Sign Random Projections)
-- **Files:** `annoy_srp.py`, `annoy_srp_glove.py`
-- **Family:** Hashing / Random projection
-- **Use case:** Fast approximate inner product search using SRP
-- **Metric:** Inner Product (MIPS)
 
----
+### 3. HNSW (Hierarchical Navigable Small World Graphs)
+**Folder:** `HNSW/`  
+Graph-based ANN method using greedy search over proximity graphs.
 
-### FAISS (Product Quantization)
-- **Files:** `faiss_pq_glove.py`, `faiss_pq_sift.py`
-- **Family:** Quantization-based ANN
-- **Indexing:** OPQ + PQ
-- **Metrics:**
-  - Inner Product (GloVe)
-  - L2 distance (SIFT1M)
-- **Strength:** Memory efficiency
+- `hnsw_glove.py`: HNSW configured for inner product similarity (MIPS)  
+- `hnsw_sift.py`: HNSW configured for Euclidean (L2) distance
 
----
+HNSW prioritizes **low query latency**, often at the cost of higher memory usage.
 
-### HNSW (Hierarchical Navigable Small World Graphs)
-- **Files:** `hnsw_glove.py`, `hnsw_sift.py`
-- **Family:** Graph-based ANN
-- **Metric:** Inner Product / L2
-- **Strength:** Low query latency via greedy graph traversal
 
----
+### 4. ScaNN
+**Folder:** `SCANN/`  
+Implements ScaNN using hierarchical partitioning and quantization.
 
-### ScaNN
-- **Files:** `scann_glove.py`, `scann_sift.py`
-- **Family:** Tree + quantization hybrid
-- **Metric:** Inner Product / L2
-- **Strength:** Strong recall–efficiency trade-off for large-scale MIPS
+- `scann_glove.py`: ScaNN for MIPS on GloVe-100-angular  
+- `scann_sift.py`: ScaNN for L2 search on SIFT1M
 
----
+ScaNN provides strong **accuracy–efficiency trade-offs** for large-scale MIPS workloads.
+
+
+## ⚙️ Reproducibility
+
+Each script is self-contained and can be executed independently. Typical workflow:
+
+1. Load dataset vectors and queries
+2. Build ANN index
+3. Perform approximate search
+4. Report:
+   - Recall@k
+   - Index build time
+   - Query latency
+   - Memory usage
+
+Example:
+```bash
+python methods/SCANN/scann_glove.py
+```
+
+### Notes
+
+- Each script is dataset-specific to avoid metric mismatches.
+- Inner Product search is used for MIPS benchmarks.
+- Euclidean distance is used for SIFT benchmarks.
+- This code is intended for **analysis and benchmarking**, not production deployment.
 
 ## Datasets
 
@@ -64,7 +85,6 @@ The scripts assume access to the following standard ANN benchmarks:
 
 Exact nearest-neighbor ground truth is required for Recall@k evaluation.
 
----
 
 ## Evaluation Metrics
 
@@ -78,13 +98,14 @@ All methods report the following metrics:
 
 Metrics are computed under identical task definitions and similarity metrics per dataset to ensure fair comparison.
 
----
 
-## Running Experiments
+## Citation
 
-Each script is self-contained and can be executed directly:
+If you use this code, please cite our paper and the original ANN methods:
 
-```bash
-python scann_glove.py
-python hnsw_sift.py
-python faiss_pq_glove.py
+- Malkov & Yashunin, *Efficient and Robust Approximate Nearest Neighbor Search Using HNSW*, TPAMI 2020  
+- Guo et al., *Accelerating Large-Scale Inference with ScaNN*, ICML 2020  
+- Johnson et al., *Billion-Scale Similarity Search with GPUs*, IEEE BigData 2017  
+- Charikar, *Similarity Estimation Techniques from Rounding Algorithms*, STOC 2002
+
+
