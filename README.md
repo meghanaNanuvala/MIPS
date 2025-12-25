@@ -1,4 +1,4 @@
-# 📊 Survey of Maximum Inner Product Search (MIPS) Methods
+# 📊 Survey & Experimental Analysis of Maximum Inner Product Search (MIPS) Methods
 
 [![Python](https://img.shields.io/badge/Python-3.8+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![NumPy](https://img.shields.io/badge/NumPy-013243?style=for-the-badge&logo=numpy&logoColor=white)](https://numpy.org/)
